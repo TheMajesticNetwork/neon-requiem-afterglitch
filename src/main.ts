@@ -2,9 +2,10 @@ import './style.css'
 import Phaser from 'phaser'
 
 type WeaponType = 'peashooter' | 'multishot' | 'laser'
-type EnemyKind = 'rusher' | 'shooter' | 'tank' | 'boss'
+type EnemyKind = 'rusher' | 'shooter' | 'tank' | 'boss' | 'drone'
 type MovementPattern = 'sine' | 'zigzag' | 'dive'
 type UpgradeId = 'fireRate' | 'projectiles' | 'moveSpeed' | 'damage' | 'maxHpHeal' | 'laserCharge'
+type BossId = 'vanta-warden' | 'shard-seraph' | 'null-hydra'
 
 type UpgradeOption = {
   id: UpgradeId
@@ -32,9 +33,19 @@ type EnemyState = {
   zigTargetX: number
   diveState: 'sweep' | 'dive'
   fireTimer: number
+  speed?: number
+  bossId?: BossId
+  bossName?: string
+  specialTimer?: number
+  summonTimer?: number
+  chargeCooldown?: number
+  laneTargetX?: number
 }
 
 class NeonRequiemScene extends Phaser.Scene {
+  private readonly hudBaseW = 1600
+  private readonly hudBaseH = 900
+
   private player!: Phaser.Physics.Arcade.Sprite
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys
   private wasd!: { [key: string]: Phaser.Input.Keyboard.Key }
@@ -60,11 +71,15 @@ class NeonRequiemScene extends Phaser.Scene {
   private weaponText!: Phaser.GameObjects.Text
   private scrapText!: Phaser.GameObjects.Text
   private totalScrapText!: Phaser.GameObjects.Text
+  private controlsText!: Phaser.GameObjects.Text
   private statusText!: Phaser.GameObjects.Text
   private bossBannerText!: Phaser.GameObjects.Text
+  private bossNameText!: Phaser.GameObjects.Text
+  private xpBarFrame!: Phaser.GameObjects.Rectangle
   private xpBarFill!: Phaser.GameObjects.Rectangle
   private bossHpBg!: Phaser.GameObjects.Rectangle
   private bossHpFill!: Phaser.GameObjects.Rectangle
+  private bgGraphics!: Phaser.GameObjects.Graphics
 
   private gameOver = false
   private levelUpPending = false
@@ -94,7 +109,10 @@ class NeonRequiemScene extends Phaser.Scene {
 
     this.drawBackground()
 
-    this.player = this.physics.add.sprite(480, 540, '').setTint(0x00f5ff)
+    const { width, height } = this.scale
+    this.physics.world.setBounds(0, 0, width, height)
+
+    this.player = this.physics.add.sprite(width * 0.5, height * 0.84, '').setTint(0x00f5ff)
     this.player.setDisplaySize(28, 28)
     this.player.setCollideWorldBounds(true)
     this.player.setDamping(true).setDrag(0.9).setMaxVelocity(360)
@@ -102,8 +120,8 @@ class NeonRequiemScene extends Phaser.Scene {
     this.cursors = this.input.keyboard!.createCursorKeys()
     this.wasd = this.input.keyboard!.addKeys('W,A,S,D') as { [key: string]: Phaser.Input.Keyboard.Key }
 
-    this.bullets = this.physics.add.group({ classType: Phaser.Physics.Arcade.Image, maxSize: 140 })
-    this.enemyBullets = this.physics.add.group({ classType: Phaser.Physics.Arcade.Image, maxSize: 180 })
+    this.bullets = this.physics.add.group({ classType: Phaser.Physics.Arcade.Image, maxSize: 160 })
+    this.enemyBullets = this.physics.add.group({ classType: Phaser.Physics.Arcade.Image, maxSize: 220 })
     this.enemies = this.physics.add.group()
 
     this.createHud()
@@ -136,6 +154,13 @@ class NeonRequiemScene extends Phaser.Scene {
     this.input.keyboard!.on('keydown-TWO', () => this.setWeapon('multishot'))
     this.input.keyboard!.on('keydown-THREE', () => this.setWeapon('laser'))
 
+    this.scale.on('resize', this.handleResize, this)
+    this.handleResize({ width: this.scale.width, height: this.scale.height } as Phaser.Structs.Size)
+
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.scale.off('resize', this.handleResize, this)
+    })
+
     this.refreshHud()
   }
 
@@ -162,12 +187,14 @@ class NeonRequiemScene extends Phaser.Scene {
 
       const state = enemy.getData('state') as EnemyState
       state.ageMs += delta
-      this.updateEnemyMovement(enemy, state)
+      this.updateEnemyMovement(enemy, state, delta)
       this.updateEnemyFire(enemy, state, delta)
 
       enemy.setData('state', state)
 
-      if (enemy.y > 700 || enemy.x < -60 || enemy.x > 1020) {
+      const rightLimit = this.scale.width + 90
+      const bottomLimit = this.scale.height + 90
+      if (enemy.y > bottomLimit || enemy.x < -90 || enemy.x > rightLimit) {
         enemy.destroy()
       }
       return null
@@ -183,9 +210,10 @@ class NeonRequiemScene extends Phaser.Scene {
     this.scrapText = this.add.text(16, 162, 'RUN SCRAP: 0', this.hudStyle('#ffd173'))
     this.totalScrapText = this.add.text(16, 192, `TOTAL SCRAP: ${this.totalScrap}`, this.hudStyle('#ff9f4d'))
 
-    this.add.rectangle(16, 232, 360, 18, 0x1a1a2e).setOrigin(0, 0.5).setStrokeStyle(2, 0x67f6ff)
+    this.xpBarFrame = this.add.rectangle(16, 232, 360, 18, 0x1a1a2e).setOrigin(0, 0.5).setStrokeStyle(2, 0x67f6ff)
     this.xpBarFill = this.add.rectangle(18, 232, 0, 14, 0x67f6ff).setOrigin(0, 0.5)
 
+    this.bossNameText = this.add.text(0, 0, '', this.hudStyle('#ff8da5')).setVisible(false)
     this.bossHpBg = this.add.rectangle(240, 24, 480, 18, 0x22070d).setOrigin(0, 0.5).setVisible(false).setStrokeStyle(2, 0xff5a7a)
     this.bossHpFill = this.add.rectangle(242, 24, 0, 14, 0xff5a7a).setOrigin(0, 0.5).setVisible(false)
 
@@ -207,6 +235,111 @@ class NeonRequiemScene extends Phaser.Scene {
         align: 'center',
       })
       .setOrigin(0.5)
+
+    this.controlsText = this.add.text(
+      16,
+      0,
+      'MOVE [WASD/ARROWS] FIRE [SPACE] SWITCH [1/2/3] RESTART [R] LEVEL-UP PICK [MOUSE/1-3]',
+      {
+        fontFamily: 'monospace',
+        fontSize: '13px',
+        color: '#9af5ff',
+        stroke: '#000000',
+        strokeThickness: 3,
+      },
+    )
+  }
+
+  private handleResize(gameSize: Phaser.Structs.Size) {
+    const width = gameSize.width
+    const height = gameSize.height
+
+    this.cameras.main.setViewport(0, 0, width, height)
+    this.physics.world.setBounds(0, 0, width, height)
+
+    if (this.player?.active) {
+      this.player.x = Phaser.Math.Clamp(this.player.x, 24, width - 24)
+      this.player.y = Phaser.Math.Clamp(this.player.y, 24, height - 24)
+    }
+
+    this.redrawBackground(width, height)
+    this.layoutHud(width, height)
+    this.refreshHud()
+  }
+
+  private redrawBackground(width: number, height: number) {
+    if (!this.bgGraphics) return
+
+    this.bgGraphics.clear()
+    this.bgGraphics.fillGradientStyle(0x080914, 0x120525, 0x1a1030, 0x04030a, 1)
+    this.bgGraphics.fillRect(0, 0, width, height)
+
+    const rows = Math.ceil(height / 26) + 1
+    for (let i = 0; i < rows; i++) {
+      const y = i * 26
+      const alpha = 0.07 + (i % 4) * 0.02
+      this.bgGraphics.lineStyle(1, 0x00d9ff, alpha * 0.65)
+      this.bgGraphics.lineBetween(0, y, width, y)
+    }
+
+    const dots = Math.floor((width * height) / 12000)
+    for (let i = 0; i < dots; i++) {
+      const x = Phaser.Math.Between(20, Math.max(20, width - 20))
+      const y = Phaser.Math.Between(40, Math.max(40, height - 20))
+      const size = Phaser.Math.Between(1, 3)
+      this.bgGraphics.fillStyle(Phaser.Math.RND.pick([0x00e7ff, 0xff4fcf, 0x72ff5e]), 0.8)
+      this.bgGraphics.fillRect(x, y, size, size)
+    }
+  }
+
+  private layoutHud(width: number, height: number) {
+    const uiScale = Phaser.Math.Clamp(Math.min(width / this.hudBaseW, height / this.hudBaseH), 0.78, 1.25)
+    const left = 16
+    const row = 30 * uiScale
+    const fontSize = Math.round(21 * uiScale)
+
+    const texts = [
+      this.scoreText,
+      this.healthText,
+      this.levelText,
+      this.waveText,
+      this.weaponText,
+      this.scrapText,
+      this.totalScrapText,
+      this.bossNameText,
+    ]
+
+    texts.forEach((text) => text.setFontSize(fontSize))
+    this.scoreText.setPosition(left, 12)
+    this.healthText.setPosition(left, 12 + row)
+    this.levelText.setPosition(left, 12 + row * 2)
+    this.waveText.setPosition(left, 12 + row * 3)
+    this.weaponText.setPosition(left, 12 + row * 4)
+    this.scrapText.setPosition(left, 12 + row * 5)
+    this.totalScrapText.setPosition(left, 12 + row * 6)
+
+    const xpY = 12 + row * 7 + 12
+    const xpWidth = Phaser.Math.Clamp(width * 0.34, 260, 520)
+    this.xpBarFrame.setPosition(left, xpY)
+    this.xpBarFrame.width = xpWidth
+    this.xpBarFill.setPosition(left + 2, xpY)
+
+    const bossWidth = Phaser.Math.Clamp(width * 0.5, 340, 760)
+    const bossX = (width - bossWidth) * 0.5
+    this.bossHpBg.setPosition(bossX, 22)
+    this.bossHpBg.width = bossWidth
+    this.bossHpFill.setPosition(bossX + 2, 22)
+    this.bossNameText.setPosition(bossX, 44)
+
+    this.bossBannerText.setPosition(width * 0.5, Math.max(72, height * 0.12))
+    this.bossBannerText.setFontSize(Math.round(28 * uiScale))
+
+    this.statusText.setPosition(width * 0.5, height * 0.5)
+    this.statusText.setFontSize(Math.round(28 * uiScale))
+
+    this.controlsText.setPosition(left, height - 18)
+    this.controlsText.setOrigin(0, 1)
+    this.controlsText.setFontSize(Math.round(13 * uiScale))
   }
 
   private spawnPatternPack() {
@@ -227,7 +360,7 @@ class NeonRequiemScene extends Phaser.Scene {
   }
 
   private spawnEnemy(kind: EnemyKind, pattern: MovementPattern) {
-    const x = Phaser.Math.Between(40, 920)
+    const x = Phaser.Math.Between(40, this.scale.width - 40)
     const y = Phaser.Math.Between(-150, -40)
 
     const enemy = this.physics.add.sprite(x, y, '')
@@ -259,6 +392,15 @@ class NeonRequiemScene extends Phaser.Scene {
       scrap = 6
       score = 35
       enemy.setDisplaySize(42, 42)
+    } else if (kind === 'drone') {
+      hp = 18 + this.wave * 2
+      speed = 160 + this.wave * 3
+      tint = 0x8bf8ff
+      touchDamage = 7
+      xp = 10
+      scrap = 1
+      score = 8
+      enemy.setDisplaySize(18, 18)
     } else {
       enemy.setDisplaySize(30, 30)
     }
@@ -287,29 +429,38 @@ class NeonRequiemScene extends Phaser.Scene {
       zigTargetX: x,
       diveState: 'sweep',
       fireTimer: Phaser.Math.Between(900, 1800),
+      speed,
     }
 
     enemy.setData('state', state)
     this.enemies.add(enemy)
 
-    if (kind === 'rusher') {
+    if (kind === 'rusher' || kind === 'drone') {
       this.physics.moveToObject(enemy, this.player, speed)
     } else {
       enemy.setVelocity(0, speed * 0.65)
     }
   }
 
-  private updateEnemyMovement(enemy: Phaser.Physics.Arcade.Sprite, state: EnemyState) {
+  private updateEnemyMovement(enemy: Phaser.Physics.Arcade.Sprite, state: EnemyState, delta: number) {
     const dangerScale = 1 + (this.wave - 1) * 0.08
 
-    if (state.kind === 'rusher') {
-      this.physics.moveToObject(enemy, this.player, (130 + this.wave * 4) * dangerScale)
+    if (state.kind === 'boss' && state.bossId) {
+      this.updateBossMovement(enemy, state, delta)
       return
     }
 
+    if (state.kind === 'rusher' || state.kind === 'drone') {
+      const speed = (state.speed ?? 130) * dangerScale
+      this.physics.moveToObject(enemy, this.player, speed)
+      return
+    }
+
+    const rightClamp = this.scale.width - 30
+
     if (state.pattern === 'sine') {
       const drift = Math.sin(state.phase + state.ageMs * 0.004) * state.amplitude
-      const targetX = Phaser.Math.Clamp(state.spawnX + drift, 30, 930)
+      const targetX = Phaser.Math.Clamp(state.spawnX + drift, 30, rightClamp)
       const yVel = state.kind === 'tank' ? 58 : 86
       enemy.setVelocity((targetX - enemy.x) * 2.4, yVel)
       return
@@ -320,7 +471,7 @@ class NeonRequiemScene extends Phaser.Scene {
       if (state.zigTimer <= 0) {
         state.zigDir *= -1
         state.zigTimer = 500
-        state.zigTargetX = Phaser.Math.Clamp(enemy.x + state.zigDir * Phaser.Math.Between(90, 150), 40, 920)
+        state.zigTargetX = Phaser.Math.Clamp(enemy.x + state.zigDir * Phaser.Math.Between(90, 150), 40, this.scale.width - 40)
       }
       const yVel = state.kind === 'tank' ? 52 : 82
       enemy.setVelocity((state.zigTargetX - enemy.x) * 3.2, yVel)
@@ -337,6 +488,44 @@ class NeonRequiemScene extends Phaser.Scene {
     this.physics.moveToObject(enemy, this.player, state.kind === 'tank' ? 88 : 138)
   }
 
+  private updateBossMovement(enemy: Phaser.Physics.Arcade.Sprite, state: EnemyState, delta: number) {
+    const width = this.scale.width
+
+    if (state.bossId === 'vanta-warden') {
+      const targetX = width * 0.5 + Math.sin(state.ageMs * 0.0018 + state.phase) * Math.min(width * 0.34, 320)
+      const targetY = Math.min(140, this.scale.height * 0.22)
+      enemy.setVelocity((targetX - enemy.x) * 2.4, (targetY - enemy.y) * 2.2)
+      return
+    }
+
+    if (state.bossId === 'shard-seraph') {
+      state.specialTimer = (state.specialTimer ?? 2100) - delta
+      if (state.specialTimer <= 0) {
+        state.specialTimer = 2200
+        state.laneTargetX = Phaser.Math.Between(100, width - 100)
+        enemy.x = state.laneTargetX
+        enemy.y = Math.max(90, this.scale.height * 0.2)
+        this.spawnDeathParticles(enemy.x, enemy.y, 0xffa9ff)
+      }
+
+      const driftX = state.laneTargetX ?? width * 0.5
+      const driftY = Math.max(90, this.scale.height * 0.2) + Math.sin(state.ageMs * 0.005) * 28
+      enemy.setVelocity((driftX - enemy.x) * 4, (driftY - enemy.y) * 4)
+      return
+    }
+
+    state.chargeCooldown = (state.chargeCooldown ?? 1800) - delta
+    if (state.chargeCooldown <= 0) {
+      state.chargeCooldown = 2300
+      this.physics.moveToObject(enemy, this.player, 300)
+      return
+    }
+
+    const orbitX = width * 0.5 + Math.cos(state.ageMs * 0.0022) * Math.min(width * 0.28, 260)
+    const orbitY = Math.max(92, this.scale.height * 0.19)
+    enemy.setVelocity((orbitX - enemy.x) * 2.5, (orbitY - enemy.y) * 2.5)
+  }
+
   private updateEnemyFire(enemy: Phaser.Physics.Arcade.Sprite, state: EnemyState, delta: number) {
     if (state.kind !== 'shooter' && state.kind !== 'boss') return
 
@@ -349,10 +538,70 @@ class NeonRequiemScene extends Phaser.Scene {
       return
     }
 
-    state.fireTimer = Phaser.Math.Between(850, 1200)
-    this.spawnEnemyBullet(enemy.x - 24, enemy.y + 18, this.player.x, this.player.y, 240, 0xff5a7a)
-    this.spawnEnemyBullet(enemy.x + 24, enemy.y + 18, this.player.x, this.player.y, 240, 0xff5a7a)
-    this.spawnEnemyBullet(enemy.x, enemy.y + 18, this.player.x, this.player.y, 260, 0xff95b8)
+    if (state.bossId === 'vanta-warden') {
+      state.fireTimer = 1500
+      const shots = 12
+      for (let i = 0; i < shots; i++) {
+        const angle = -160 + (i * 140) / (shots - 1)
+        const v = this.physics.velocityFromAngle(angle, 220)
+        this.spawnEnemyBulletVelocity(enemy.x, enemy.y + 20, v.x, v.y, 0xff5a7a)
+      }
+      return
+    }
+
+    if (state.bossId === 'shard-seraph') {
+      state.fireTimer = 980
+      const lanes = [-24, 0, 24]
+      lanes.forEach((dx) => {
+        this.spawnEnemyBullet(enemy.x + dx, enemy.y + 18, this.player.x + dx * 0.5, this.player.y, 285, 0xffb0ff)
+      })
+      return
+    }
+
+    // null-hydra
+    state.fireTimer = 1250
+    this.spawnEnemyBullet(enemy.x - 26, enemy.y + 18, this.player.x, this.player.y, 250, 0x8bf8ff)
+    this.spawnEnemyBullet(enemy.x + 26, enemy.y + 18, this.player.x, this.player.y, 250, 0x8bf8ff)
+
+    state.summonTimer = (state.summonTimer ?? 0) + 1
+    if (state.summonTimer % 2 === 0) {
+      this.spawnHydraDrone(enemy.x - 40)
+      this.spawnHydraDrone(enemy.x + 40)
+    }
+  }
+
+  private spawnHydraDrone(x: number) {
+    const y = Phaser.Math.Clamp(this.scale.height * 0.22, 90, 180)
+    const drone = this.physics.add.sprite(x, y, '')
+    drone.setDisplaySize(16, 16)
+    drone.setTint(0x8bf8ff)
+    drone.setBlendMode(Phaser.BlendModes.SCREEN)
+
+    const state: EnemyState = {
+      kind: 'drone',
+      hp: 18 + this.wave * 2,
+      maxHp: 18 + this.wave * 2,
+      touchDamage: 7,
+      xp: 8,
+      scrap: 1,
+      score: 6,
+      pattern: 'dive',
+      spawnX: x,
+      spawnY: y,
+      ageMs: 0,
+      amplitude: 20,
+      phase: Phaser.Math.FloatBetween(0, Math.PI * 2),
+      zigDir: 1,
+      zigTimer: 0,
+      zigTargetX: x,
+      diveState: 'dive',
+      fireTimer: 9999,
+      speed: 180 + this.wave * 2,
+    }
+
+    drone.setData('state', state)
+    this.enemies.add(drone)
+    this.physics.moveToObject(drone, this.player, state.speed ?? 180)
   }
 
   private spawnEnemyBullet(fromX: number, fromY: number, targetX: number, targetY: number, speed: number, tint: number) {
@@ -365,6 +614,22 @@ class NeonRequiemScene extends Phaser.Scene {
     if (bullet.body) bullet.body.enable = true
 
     this.physics.moveTo(bullet, targetX, targetY, speed)
+
+    this.time.delayedCall(2600, () => {
+      if (bullet.active) bullet.disableBody(true, true)
+    })
+  }
+
+  private spawnEnemyBulletVelocity(fromX: number, fromY: number, vx: number, vy: number, tint: number) {
+    const bullet = this.enemyBullets.get(fromX, fromY) as Phaser.Physics.Arcade.Image
+    if (!bullet) return
+
+    bullet.setActive(true).setVisible(true)
+    bullet.setTint(tint)
+    bullet.setDisplaySize(8, 14)
+    if (bullet.body) bullet.body.enable = true
+
+    bullet.setVelocity(vx, vy)
 
     this.time.delayedCall(2600, () => {
       if (bullet.active) bullet.disableBody(true, true)
@@ -422,7 +687,8 @@ class NeonRequiemScene extends Phaser.Scene {
 
   private fireLaser() {
     const width = 10 + this.extraProjectiles * 3
-    const laser = this.add.rectangle(this.player.x, this.player.y - 220, width, 450, 0x00f5ff, 0.8)
+    const laserHeight = this.scale.height * 0.72
+    const laser = this.add.rectangle(this.player.x, this.player.y - laserHeight * 0.5, width, laserHeight, 0x00f5ff, 0.8)
     laser.setBlendMode(Phaser.BlendModes.ADD)
     this.time.delayedCall(80, () => laser.destroy())
 
@@ -436,7 +702,7 @@ class NeonRequiemScene extends Phaser.Scene {
     })
   }
 
-  private onBulletHitEnemy(bulletObj: any, enemyObj: any) {
+  private onBulletHitEnemy(bulletObj: unknown, enemyObj: unknown) {
     const bullet = bulletObj as Phaser.Physics.Arcade.Image
     const enemy = enemyObj as Phaser.Physics.Arcade.Sprite
     bullet.disableBody(true, true)
@@ -452,7 +718,7 @@ class NeonRequiemScene extends Phaser.Scene {
     state.hp -= damage
     enemy.setTintFill(0xffffff)
     this.time.delayedCall(50, () => {
-      if (enemy.active) enemy.clearTint().setTint(this.colorForEnemyKind(state.kind))
+      if (enemy.active) enemy.clearTint().setTint(this.colorForEnemyKind(state.kind, state.bossId))
     })
 
     if (state.hp <= 0) {
@@ -474,7 +740,7 @@ class NeonRequiemScene extends Phaser.Scene {
     this.scoreText.setText(`SCORE: ${this.score}`)
     this.scrapText.setText(`RUN SCRAP: ${this.runScrap}`)
 
-    this.spawnDeathParticles(enemy.x, enemy.y, this.colorForEnemyKind(state.kind))
+    this.spawnDeathParticles(enemy.x, enemy.y, this.colorForEnemyKind(state.kind, state.bossId))
     this.playTone(state.kind === 'tank' || state.kind === 'boss' ? 120 : 190, 0.07, 'sawtooth', 0.07)
 
     if (state.kind === 'boss') {
@@ -485,14 +751,15 @@ class NeonRequiemScene extends Phaser.Scene {
       this.bossActive = false
       this.bossHpBg.setVisible(false)
       this.bossHpFill.setVisible(false)
-      this.showBossBanner('BOSS DOWN! +POWER UPGRADE')
+      this.bossNameText.setVisible(false)
+      this.showBossBanner(`BOSS DOWN // ${state.bossName?.toUpperCase() ?? 'TARGET'} NEUTRALIZED`)
       this.offerGuaranteedBossUpgrade()
     }
 
     enemy.destroy()
   }
 
-  private onPlayerHitEnemy(playerObj: any, enemyObj: any) {
+  private onPlayerHitEnemy(playerObj: unknown, enemyObj: unknown) {
     const enemy = enemyObj as Phaser.Physics.Arcade.Sprite
     const state = enemy.getData('state') as EnemyState
 
@@ -507,7 +774,7 @@ class NeonRequiemScene extends Phaser.Scene {
     this.time.delayedCall(80, () => player.clearTint().setTint(0x00f5ff))
   }
 
-  private onPlayerHitByProjectile(_playerObj: any, bulletObj: any) {
+  private onPlayerHitByProjectile(_playerObj: unknown, bulletObj: unknown) {
     const bullet = bulletObj as Phaser.Physics.Arcade.Image
     bullet.disableBody(true, true)
     this.inflictPlayerDamage(8)
@@ -542,7 +809,7 @@ class NeonRequiemScene extends Phaser.Scene {
 
     const options = this.pickUpgradeOptions(3)
 
-    const panel = this.add.container(480, 320)
+    const panel = this.add.container(this.scale.width * 0.5, this.scale.height * 0.5)
     const bg = this.add.rectangle(0, 0, 620, 340, 0x06081b, 0.95).setStrokeStyle(3, 0x72ffea)
     const title = this.add
       .text(0, -125, `LEVEL ${this.level} // SELECT UPGRADE`, {
@@ -660,7 +927,7 @@ class NeonRequiemScene extends Phaser.Scene {
     const strongest = options.sort((a, b) => this.upgradePriority(b.id) - this.upgradePriority(a.id))[0]
     strongest.apply()
 
-    this.statusText.setText(`SALVAGE BONUS\n${strongest.title}\n(Guaranteed Boss Reward)`) 
+    this.statusText.setText(`SALVAGE BONUS\n${strongest.title}\n(Guaranteed Boss Reward)`)
     this.time.delayedCall(1200, () => {
       this.statusText.setText('')
       this.resumeAfterUpgrade()
@@ -710,33 +977,69 @@ class NeonRequiemScene extends Phaser.Scene {
     if (this.bossActive || this.gameOver) return
 
     this.bossActive = true
-    this.showBossBanner(`WAVE ${this.wave} // EXECUTIONER CORE INBOUND`)
 
-    const boss = this.physics.add.sprite(480, -120, '')
+    const cycle = Math.floor(this.wave / 5) % 3
+    const bossDefs = [
+      {
+        id: 'vanta-warden' as BossId,
+        name: 'Vanta Warden',
+        tint: 0xff2d62,
+        hpMult: 1,
+        touchDamage: 22,
+        banner: 'BOSS WAVE // VANTA WARDEN: NOVA ARTILLERY ONLINE',
+      },
+      {
+        id: 'shard-seraph' as BossId,
+        name: 'Shard Seraph',
+        tint: 0xff98f6,
+        hpMult: 0.88,
+        touchDamage: 20,
+        banner: 'BOSS WAVE // SHARD SERAPH: PHASE LANES ENGAGED',
+      },
+      {
+        id: 'null-hydra' as BossId,
+        name: 'Null Hydra',
+        tint: 0x8bf8ff,
+        hpMult: 0.95,
+        touchDamage: 21,
+        banner: 'BOSS WAVE // NULL HYDRA: SWARM PROTOCOL RISING',
+      },
+    ]
+
+    const def = bossDefs[cycle]
+    this.showBossBanner(def.banner)
+
+    const boss = this.physics.add.sprite(this.scale.width * 0.5, -120, '')
     boss.setDisplaySize(120, 92)
-    boss.setTint(0xff2d62)
+    boss.setTint(def.tint)
     boss.setBlendMode(Phaser.BlendModes.SCREEN)
 
-    const hp = 680 + this.wave * 120
+    const hp = Math.floor((640 + this.wave * 118) * def.hpMult)
     const state: EnemyState = {
       kind: 'boss',
       hp,
       maxHp: hp,
-      touchDamage: 22,
-      xp: 140,
-      scrap: 28,
-      score: 220,
+      touchDamage: def.touchDamage,
+      xp: 160,
+      scrap: 32,
+      score: 240,
       pattern: 'sine',
-      spawnX: 480,
+      spawnX: this.scale.width * 0.5,
       spawnY: -120,
       ageMs: 0,
-      amplitude: 220,
+      amplitude: Math.min(220, this.scale.width * 0.22),
       phase: Phaser.Math.FloatBetween(0, Math.PI * 2),
       zigDir: 1,
       zigTimer: 0,
-      zigTargetX: 480,
+      zigTargetX: this.scale.width * 0.5,
       diveState: 'sweep',
       fireTimer: 1000,
+      bossId: def.id,
+      bossName: def.name,
+      specialTimer: 1800,
+      summonTimer: 0,
+      chargeCooldown: 1800,
+      laneTargetX: this.scale.width * 0.5,
     }
 
     boss.setData('state', state)
@@ -745,18 +1048,22 @@ class NeonRequiemScene extends Phaser.Scene {
 
     this.bossHpBg.setVisible(true)
     this.bossHpFill.setVisible(true)
+    this.bossNameText.setVisible(true)
+    this.bossNameText.setText(`BOSS: ${def.name.toUpperCase()}`)
     this.updateBossUi(state)
   }
 
   private updateBossUi(state: EnemyState) {
     const pct = Phaser.Math.Clamp(state.hp / state.maxHp, 0, 1)
-    this.bossHpFill.width = 476 * pct
+    const fullWidth = Math.max(0, this.bossHpBg.width - 4)
+    this.bossHpFill.width = fullWidth * pct
+    this.bossNameText.setText(`BOSS: ${(state.bossName ?? 'UNKNOWN').toUpperCase()}  ${Math.ceil(pct * 100)}%`)
   }
 
   private showBossBanner(text: string) {
     this.bossBannerText.setText(text)
     this.bossBannerTimer?.remove(false)
-    this.bossBannerTimer = this.time.delayedCall(2200, () => this.bossBannerText.setText(''))
+    this.bossBannerTimer = this.time.delayedCall(2300, () => this.bossBannerText.setText(''))
   }
 
   private refreshHud() {
@@ -767,7 +1074,7 @@ class NeonRequiemScene extends Phaser.Scene {
     this.scrapText.setText(`RUN SCRAP: ${this.runScrap}`)
     this.totalScrapText.setText(`TOTAL SCRAP: ${this.totalScrap}`)
     const pct = Phaser.Math.Clamp(this.xp / this.xpToNext, 0, 1)
-    this.xpBarFill.width = 356 * pct
+    this.xpBarFill.width = Math.max(0, this.xpBarFrame.width - 4) * pct
   }
 
   private spawnDeathParticles(x: number, y: number, color: number) {
@@ -821,10 +1128,15 @@ class NeonRequiemScene extends Phaser.Scene {
     }
   }
 
-  private colorForEnemyKind(kind: EnemyKind): number {
+  private colorForEnemyKind(kind: EnemyKind, bossId?: BossId): number {
     if (kind === 'shooter') return 0xffa93c
     if (kind === 'tank') return 0x8f7dff
-    if (kind === 'boss') return 0xff2d62
+    if (kind === 'drone') return 0x8bf8ff
+    if (kind === 'boss') {
+      if (bossId === 'shard-seraph') return 0xff98f6
+      if (bossId === 'null-hydra') return 0x8bf8ff
+      return 0xff2d62
+    }
     return 0xff5a7a
   }
 
@@ -849,32 +1161,8 @@ class NeonRequiemScene extends Phaser.Scene {
   }
 
   private drawBackground() {
-    const g = this.add.graphics()
-    g.fillGradientStyle(0x080914, 0x120525, 0x1a1030, 0x04030a, 1)
-    g.fillRect(0, 0, 960, 640)
-
-    for (let i = 0; i < 26; i++) {
-      const y = i * 26
-      const alpha = 0.07 + (i % 4) * 0.02
-      g.lineStyle(1, 0x00d9ff, alpha * 0.65)
-      g.lineBetween(0, y, 960, y)
-    }
-
-    for (let i = 0; i < 60; i++) {
-      const x = Phaser.Math.Between(20, 940)
-      const y = Phaser.Math.Between(40, 620)
-      const size = Phaser.Math.Between(1, 3)
-      g.fillStyle(Phaser.Math.RND.pick([0x00e7ff, 0xff4fcf, 0x72ff5e]), 0.8)
-      g.fillRect(x, y, size, size)
-    }
-
-    this.add.text(16, 604, 'MOVE [WASD/ARROWS] FIRE [SPACE] SWITCH [1/2/3] RESTART [R] LEVEL-UP PICK [MOUSE/1-3]', {
-      fontFamily: 'monospace',
-      fontSize: '13px',
-      color: '#9af5ff',
-      stroke: '#000000',
-      strokeThickness: 3,
-    })
+    this.bgGraphics = this.add.graphics()
+    this.redrawBackground(this.scale.width, this.scale.height)
   }
 
   private hudStyle(color: string): Phaser.Types.GameObjects.Text.TextStyle {
@@ -892,8 +1180,12 @@ const config: Phaser.Types.Core.GameConfig = {
   type: Phaser.AUTO,
   parent: 'game',
   backgroundColor: '#05010e',
-  width: 960,
-  height: 640,
+  width: window.innerWidth,
+  height: window.innerHeight,
+  scale: {
+    mode: Phaser.Scale.RESIZE,
+    autoCenter: Phaser.Scale.CENTER_BOTH,
+  },
   physics: {
     default: 'arcade',
     arcade: { debug: false },
@@ -901,14 +1193,6 @@ const config: Phaser.Types.Core.GameConfig = {
   scene: [NeonRequiemScene],
 }
 
-document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
-  <div class="shell">
-    <header class="topbar">
-      <h1>NEON REQUIEM: AFTERGLITCH</h1>
-      <p>Survive the blackout grid. Level up, build your loadout, and break every boss wave.</p>
-    </header>
-    <div id="game" class="game-wrap"></div>
-  </div>
-`
+document.querySelector<HTMLDivElement>('#app')!.innerHTML = '<div id="game" class="game-wrap"></div>'
 
 new Phaser.Game(config)

@@ -9,7 +9,7 @@ You are a rogue runner trapped in a corrupted city grid.
 - Move with **WASD** or **Arrow keys**
 - Shoot with **Space**
 - Switch weapons with **1 / 2 / 3**
-- Survive escalating enemy waves and boss encounters every 5 waves
+- Survive escalating enemy waves and named boss encounters every 5 waves
 - Gain **XP** from kills and level up during a run
 - On level-up, action pauses and you pick 1 of 3 upgrades
 - Earn run-based **Scrap** and bank total scrap across runs
@@ -42,9 +42,20 @@ You are a rogue runner trapped in a corrupted city grid.
 ### Boss cadence
 
 - Distinct boss spawns every 5th wave
-- Boss has high HP, unique multi-shot attack pressure, and visible HP bar
-- Boss wave includes clear banner messaging
+- Rotating named bosses with unique mechanics:
+  - **Vanta Warden**: radial nova artillery spread
+  - **Shard Seraph**: lane-phase teleports + fast tri-burst shots
+  - **Null Hydra**: charge movement + periodic drone summons
+- Boss health bar now includes boss name + health percentage
+- Boss wave includes a clear intro banner cue
 - Boss kill grants big score + scrap reward and guaranteed strong upgrade reward
+
+### Fullscreen + responsive layout
+
+- Game now fills the full browser viewport (`100vw x 100vh`) with no shell letterboxing
+- Phaser runs in `RESIZE` scale mode and updates camera/physics bounds on resize events
+- HUD elements are anchored and scaled for common desktop resolutions to stay readable
+- Gameplay systems (collisions, projectiles, laser height, spawn bounds) adapt to current viewport size
 
 ### Juice pass
 
