@@ -96,7 +96,7 @@ class NeonRequiemScene extends Phaser.Scene {
     })
   }
 
-  update(time: number) {
+  update(_time: number, delta: number) {
     if (this.gameOver) {
       this.player.setVelocity(0, 0)
       return
@@ -113,7 +113,16 @@ class NeonRequiemScene extends Phaser.Scene {
 
     this.player.setVelocity(vx, vy)
 
-    this.fireCooldown = Math.max(0, this.fireCooldown - (time ? 16 : 0))
+    this.fireCooldown = Math.max(0, this.fireCooldown - delta)
+
+    // Continuously home enemies so they don't stall or drift off-course
+    const enemySpeed = 80 + Math.min(100, this.score / 5)
+    this.enemies.children.iterate((child) => {
+      const enemy = child as Phaser.Physics.Arcade.Sprite | null
+      if (!enemy || !enemy.active) return null
+      this.physics.moveToObject(enemy, this.player, enemySpeed)
+      return null
+    })
   }
 
   private drawBackground() {
@@ -165,12 +174,13 @@ class NeonRequiemScene extends Phaser.Scene {
     const waveSize = 2 + Math.floor(this.score / 80)
 
     for (let i = 0; i < waveSize; i++) {
-      const side = Phaser.Math.Between(0, 2)
-      const x = side === 0 ? Phaser.Math.Between(20, 940) : side === 1 ? -20 : 980
-      const y = side === 0 ? -20 : Phaser.Math.Between(40, 580)
+      // Spawn above the arena so enemies visibly "come down"
+      const x = Phaser.Math.Between(24, 936)
+      const y = Phaser.Math.Between(-140, -24)
 
       const enemy = this.physics.add.sprite(x, y, '').setTint(0xff3366)
       enemy.setDisplaySize(24, 24)
+      enemy.setBounce(0)
 
       this.physics.moveToObject(enemy, this.player, 80 + Math.min(80, this.score / 6))
       this.enemies.add(enemy)
