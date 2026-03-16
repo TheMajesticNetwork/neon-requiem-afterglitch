@@ -133,7 +133,7 @@ class NeonRequiemScene extends Phaser.Scene {
     for (let i = 0; i < 26; i++) {
       const y = i * 26
       const alpha = 0.07 + (i % 4) * 0.02
-      g.lineStyle(1, 0x00d9ff, alpha)
+      g.lineStyle(1, 0x00d9ff, alpha * 0.65)
       g.lineBetween(0, y, 960, y)
     }
 
@@ -178,8 +178,11 @@ class NeonRequiemScene extends Phaser.Scene {
       const x = Phaser.Math.Between(24, 936)
       const y = Phaser.Math.Between(-140, -24)
 
-      const enemy = this.physics.add.sprite(x, y, '').setTint(0xff3366)
-      enemy.setDisplaySize(24, 24)
+      const enemy = this.physics.add.sprite(x, y, '')
+      enemy.setDisplaySize(30, 30)
+      enemy.setTint(0xff5a7a)
+      enemy.setAlpha(1)
+      enemy.setBlendMode(Phaser.BlendModes.SCREEN)
       enemy.setBounce(0)
 
       this.physics.moveToObject(enemy, this.player, 80 + Math.min(80, this.score / 6))
