@@ -12,9 +12,11 @@ class NeonRequiemScene extends Phaser.Scene {
   private scoreText!: Phaser.GameObjects.Text
   private healthText!: Phaser.GameObjects.Text
   private statusText!: Phaser.GameObjects.Text
+  private weaponText!: Phaser.GameObjects.Text
   private gameOver = false
   private fireCooldown = 0
   private enemyTimer?: Phaser.Time.TimerEvent
+  private weapon: 'peashooter' | 'multishot' | 'laser' = 'peashooter'
 
   constructor() {
     super('NeonRequiemScene')
@@ -49,6 +51,8 @@ class NeonRequiemScene extends Phaser.Scene {
         align: 'center',
       })
       .setOrigin(0.5)
+
+    this.weaponText = this.add.text(16, 74, 'WEAPON: PEASHOOTER [1]', this.hudStyle('#72ff5e'))
 
     this.physics.add.overlap(
       this.bullets,
@@ -94,6 +98,10 @@ class NeonRequiemScene extends Phaser.Scene {
     this.input.keyboard!.on('keydown-R', () => {
       if (this.gameOver) this.scene.restart()
     })
+
+    this.input.keyboard!.on('keydown-ONE', () => this.setWeapon('peashooter'))
+    this.input.keyboard!.on('keydown-TWO', () => this.setWeapon('multishot'))
+    this.input.keyboard!.on('keydown-THREE', () => this.setWeapon('laser'))
   }
 
   update(_time: number, delta: number) {
@@ -145,7 +153,7 @@ class NeonRequiemScene extends Phaser.Scene {
       g.fillRect(x, y, size, size)
     }
 
-    this.add.text(16, 600, 'CONTROLS: MOVE [WASD/ARROWS]  FIRE [SPACE]  RESTART [R]', {
+    this.add.text(16, 600, 'MOVE [WASD/ARROWS] FIRE [SPACE] WEAPONS [1/2/3] RESTART [R]', {
       fontFamily: 'monospace',
       fontSize: '14px',
       color: '#9af5ff',
@@ -157,17 +165,62 @@ class NeonRequiemScene extends Phaser.Scene {
   private shoot() {
     if (this.fireCooldown > 0) return
 
-    const bullet = this.bullets.get(this.player.x, this.player.y - 18) as Phaser.Physics.Arcade.Image
+    if (this.weapon === 'laser') {
+      this.fireLaser()
+      this.fireCooldown = 320
+      return
+    }
+
+    if (this.weapon === 'multishot') {
+      this.spawnBullet(this.player.x, this.player.y - 18, -90, 0x72ff5e, 5, 14, 500)
+      this.spawnBullet(this.player.x - 8, this.player.y - 16, -105, 0x33d6ff, 4, 12, 480)
+      this.spawnBullet(this.player.x + 8, this.player.y - 16, -75, 0x33d6ff, 4, 12, 480)
+      this.fireCooldown = 220
+      return
+    }
+
+    this.spawnBullet(this.player.x, this.player.y - 18, -90, 0x72ff5e, 5, 14, 460)
+    this.fireCooldown = 140
+  }
+
+  private spawnBullet(x: number, y: number, angleDeg: number, tint: number, w: number, h: number, speed: number) {
+    const bullet = this.bullets.get(x, y) as Phaser.Physics.Arcade.Image
     if (!bullet) return
 
     bullet.setActive(true).setVisible(true)
-    bullet.setTint(0x72ff5e)
-    bullet.setDisplaySize(5, 14)
+    bullet.setTint(tint)
+    bullet.setDisplaySize(w, h)
     if (bullet.body) bullet.body.enable = true
-    bullet.setVelocity(0, -460)
+
+    const v = this.physics.velocityFromAngle(angleDeg, speed)
+    bullet.setVelocity(v.x, v.y)
 
     this.time.delayedCall(1800, () => bullet.disableBody(true, true))
-    this.fireCooldown = 140
+  }
+
+  private fireLaser() {
+    const laser = this.add.rectangle(this.player.x, this.player.y - 200, 10, 420, 0x00f5ff, 0.8)
+    laser.setBlendMode(Phaser.BlendModes.ADD)
+    this.time.delayedCall(90, () => laser.destroy())
+
+    this.enemies.children.iterate((child) => {
+      const enemy = child as Phaser.Physics.Arcade.Sprite | null
+      if (!enemy || !enemy.active) return null
+      if (Math.abs(enemy.x - this.player.x) < 26 && enemy.y < this.player.y) {
+        enemy.destroy()
+        this.score += 10
+      }
+      return null
+    })
+    this.scoreText.setText(`SCORE: ${this.score}`)
+  }
+
+  private setWeapon(next: 'peashooter' | 'multishot' | 'laser') {
+    this.weapon = next
+    let label = 'PEASHOOTER [1]'
+    if (next === 'multishot') label = 'MULTI-SHOT [2]'
+    if (next === 'laser') label = 'ION LASER [3]'
+    this.weaponText.setText(`WEAPON: ${label}`)
   }
 
   private spawnWave() {
